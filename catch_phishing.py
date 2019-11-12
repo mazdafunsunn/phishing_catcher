@@ -22,16 +22,15 @@ from termcolor import colored, cprint
 from tld import get_tld
 
 from confusables import unconfuse
+import argparse
 
-certstream_url = 'wss://certstream.calidog.io'
+CERTSTREAM_URL_DEFAULT = 'wss://certstream.calidog.io'
 
-log_suspicious = os.path.dirname(os.path.realpath(__file__))+'/suspicious_domains_'+time.strftime("%Y-%m-%d")+'.log'
+LOG_SUSPICIOUS_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/suspicious_domains_'+time.strftime("%Y-%m-%d")+'.log'
 
-suspicious_yaml = os.path.dirname(os.path.realpath(__file__))+'/suspicious.yaml'
+SUSPICIOUS_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/suspicious.yaml'
 
-external_yaml = os.path.dirname(os.path.realpath(__file__))+'/external.yaml'
-
-pbar = tqdm.tqdm(desc='certificate_update', unit='cert')
+EXTERNAL_YAML_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/external.yaml'
 
 def score_domain(domain):
     """Score `domain`.
@@ -134,10 +133,60 @@ def callback(message, context):
 
 
 if __name__ == '__main__':
-    with open(suspicious_yaml, 'r') as f:
+
+    parser = argparse.ArgumentParser(
+        description="Identify suspicious domains from Certificate Transparency Logs."
+    )
+
+    parser.add_argument(
+        '--debug', '-d',
+        action='store_true',
+        default=False,
+        help='Enable debugging output.'
+    )
+
+    parser.add_argument(
+        '--certstream-url', '-u',
+        type=str,
+        default=CERTSTREAM_URL_DEFAULT,
+        help=f"URL for the Certificate Transparency stream. DEFAULT: {CERTSTREAM_URL_DEFAULT}."
+    )
+
+    parser.add_argument(
+        '--suspicious-path', '-s',
+        type=str,
+        default=LOG_SUSPICIOUS_DEFAULT,
+        help=f'File in which to store the suspicious domain log. DEFAULT: {LOG_SUSPICIOUS_DEFAULT}.'
+    )
+
+    parser.add_argument(
+        '--suspicious-yaml', '-S',
+        type=str,
+        default=SUSPICIOUS_DEFAULT,
+        help=f'YAML file containing suspicious entries and weights. DEFAULT: {SUSPICIOUS_DEFAULT}.'
+    )
+
+    parser.add_argument(
+        '--external-yaml', '-E',
+        type=str,
+        default=EXTERNAL_YAML_DEFAULT,
+        help=f'YAML file containing site-specific suspicious entries and weights. DEFAULT: {EXTERNAL_YAML_DEFAULT}.'
+    )
+
+    args = parser.parse_args()
+
+    if args.debug:
+        print("**********")
+        print(f"Command line args: {args}")
+        print("**********")
+        print()
+
+    pbar = tqdm.tqdm(desc='certificate_update', unit=' certs')
+
+    with open(args.suspicious_yaml, 'r') as f:
         suspicious = yaml.safe_load(f)
 
-    with open(external_yaml, 'r') as f:
+    with open(args.external_yaml, 'r') as f:
         external = yaml.safe_load(f)
 
     if external['override_suspicious.yaml'] is True:
@@ -149,4 +198,4 @@ if __name__ == '__main__':
         if external['tlds'] is not None:
             suspicious['tlds'].update(external['tlds'])
 
-    certstream.listen_for_events(callback, url=certstream_url)
+    certstream.listen_for_events(callback, url=args.certstream_url)
