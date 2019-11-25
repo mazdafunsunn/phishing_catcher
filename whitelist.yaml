@@ -1,0 +1,6 @@
+whitelist:
+# Domains that END WITH these strings won't be 
+# considered suspicious at all (they are likely
+# legitimate). 
+  - '.amazonaws.com'
+  - '.netflix.com'
