@@ -65,7 +65,7 @@ def score_domain(domain):
     # Remove lookalike characters using list from http://www.unicode.org/reports/tr39
     domain = unconfuse(domain)
 
-    words_in_domain = re.split("\W+", domain)
+    words_in_domain = re.split(r"\W+", domain)
 
     # ie. detect fake .com (ie. *.com-account-management.info)
     if words_in_domain[0] in ['com', 'net', 'org']:
@@ -198,4 +198,8 @@ if __name__ == '__main__':
         if external['tlds'] is not None:
             suspicious['tlds'].update(external['tlds'])
 
+    # Set this here globally, since we can't pass args into the 
+    # callback function. 
+    log_suspicious = args.suspicious_path
+    
     certstream.listen_for_events(callback, url=args.certstream_url)
