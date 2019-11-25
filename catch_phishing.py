@@ -24,6 +24,11 @@ from tld import get_tld
 from confusables import unconfuse
 import argparse
 
+from datetime import datetime, timezone
+import csv
+
+TIMESTAMP_OUTPUT_FORMAT = "%FT%T%z"
+
 CERTSTREAM_URL_DEFAULT = 'wss://certstream.calidog.io'
 
 LOG_SUSPICIOUS_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/suspicious_domains_'+time.strftime("%Y-%m-%d")+'.log'
@@ -31,6 +36,8 @@ LOG_SUSPICIOUS_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/suspiciou
 SUSPICIOUS_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/suspicious.yaml'
 
 EXTERNAL_YAML_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/external.yaml'
+
+WHITELIST_YAML_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/whitelist.yaml'
 
 def score_domain(domain):
     """Score `domain`.
@@ -44,6 +51,12 @@ def score_domain(domain):
         int: the score of `domain`.
     """
     score = 0
+
+    for t in suspicious['whitelist']:
+        if domain.endswith(t):
+            # this should already be set to 0!
+            return score
+
     for t in suspicious['tlds']:
         if domain.endswith(t):
             score += 20
@@ -128,9 +141,31 @@ def callback(message, context):
                     "{} (score={})".format(colored(domain, attrs=['underline']), score))
 
             if score >= 75:
-                with open(log_suspicious, 'a') as f:
-                    f.write("{}\n".format(domain))
-
+                if not args.details:
+                    suspicious_writer.writerow(
+                        [
+                            domain
+                        ]
+                    )
+                else:
+                    suspicious_writer.writerow(
+                        [
+                            datetime.now(timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            domain,
+                            score,
+                            "|".join(message["data"]["leaf_cert"]["all_domains"]),
+                            message["data"]["leaf_cert"]["fingerprint"],
+                            message["data"]["leaf_cert"]["serial_number"],
+                            datetime.fromtimestamp(message["data"]["leaf_cert"]["not_before"], tz=timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            datetime.fromtimestamp(message["data"]["leaf_cert"]["not_after"], tz=timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            message["data"]["leaf_cert"]["subject"]["aggregated"],
+                            datetime.fromtimestamp(message["data"]["seen"], tz=timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            message["data"]["source"]["name"],
+                            message["data"]["source"]["url"],
+                            message["data"]["update_type"]
+                        ]
+                    )
+                suspicious_file.flush()
 
 if __name__ == '__main__':
 
@@ -173,6 +208,14 @@ if __name__ == '__main__':
         help=f'YAML file containing site-specific suspicious entries and weights. DEFAULT: {EXTERNAL_YAML_DEFAULT}.'
     )
 
+    parser.add_argument(
+        '--details', '-D',
+        #type=bool,
+        action='store_true',
+        default=False,
+        help='Add more details to the suspicious domain log. DEFAULT: False.'
+    )
+
     args = parser.parse_args()
 
     if args.debug:
@@ -197,9 +240,32 @@ if __name__ == '__main__':
 
         if external['tlds'] is not None:
             suspicious['tlds'].update(external['tlds'])
-
-    # Set this here globally, since we can't pass args into the 
-    # callback function. 
-    log_suspicious = args.suspicious_path
     
+    # Open the suspicious domain file for writing only once. The
+    # callback will also access this globally.
+    log_suspicious = args.suspicious_path
+    suspicious_file = open(log_suspicious, 'a')
+    suspicious_writer = csv.writer(
+        suspicious_file,
+        dialect='excel'
+    )
+
+    suspicious_writer.writerow(
+        [
+            "timestamp",
+            "domain",
+            "score",
+            "all_domains",
+            "fingerprint",
+            "serial_number",
+            "not_before",
+            "not_after",
+            "subject",
+            "seen",
+            "issuer",
+            "issuer_url",
+            "message_type"
+        ]
+    )
+
     certstream.listen_for_events(callback, url=args.certstream_url)
