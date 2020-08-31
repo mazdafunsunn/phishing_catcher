@@ -1,2 +1,4 @@
 *.pyc
-suspicious_domains.log
+*.log
+site-*
+.vscode

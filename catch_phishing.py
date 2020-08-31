@@ -22,16 +22,22 @@ from termcolor import colored, cprint
 from tld import get_tld
 
 from confusables import unconfuse
+import argparse
 
-certstream_url = 'wss://certstream.calidog.io'
+from datetime import datetime, timezone
+import csv
 
-log_suspicious = os.path.dirname(os.path.realpath(__file__))+'/suspicious_domains_'+time.strftime("%Y-%m-%d")+'.log'
+TIMESTAMP_OUTPUT_FORMAT = "%FT%T%z"
 
-suspicious_yaml = os.path.dirname(os.path.realpath(__file__))+'/suspicious.yaml'
+CERTSTREAM_URL_DEFAULT = 'wss://certstream.calidog.io'
 
-external_yaml = os.path.dirname(os.path.realpath(__file__))+'/external.yaml'
+LOG_SUSPICIOUS_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/suspicious_domains_'+time.strftime("%Y-%m-%d")+'.log'
 
-pbar = tqdm.tqdm(desc='certificate_update', unit='cert')
+SUSPICIOUS_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/suspicious.yaml'
+
+EXTERNAL_YAML_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/external.yaml'
+
+WHITELIST_YAML_DEFAULT = os.path.dirname(os.path.realpath(__file__))+'/whitelist.yaml'
 
 def entropy(string):
     """Calculates the Shannon entropy of a string"""
@@ -51,6 +57,12 @@ def score_domain(domain):
         int: the score of `domain`.
     """
     score = 0
+
+    for t in suspicious['whitelist']:
+        if domain.endswith(t):
+            # this should already be set to 0!
+            return score
+
     for t in suspicious['tlds']:
         if domain.endswith(t):
             score += 20
@@ -72,7 +84,7 @@ def score_domain(domain):
     # Remove lookalike characters using list from http://www.unicode.org/reports/tr39
     domain = unconfuse(domain)
 
-    words_in_domain = re.split("\W+", domain)
+    words_in_domain = re.split(r"\W+", domain)
 
     # ie. detect fake .com (ie. *.com-account-management.info)
     if words_in_domain[0] in ['com', 'net', 'org']:
@@ -135,15 +147,95 @@ def callback(message, context):
                     "{} (score={})".format(colored(domain, attrs=['underline']), score))
 
             if score >= 75:
-                with open(log_suspicious, 'a') as f:
-                    f.write("{}\n".format(domain))
-
+                if not args.details:
+                    suspicious_writer.writerow(
+                        [
+                            domain
+                        ]
+                    )
+                else:
+                    suspicious_writer.writerow(
+                        [
+                            datetime.now(timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            domain,
+                            score,
+                            "|".join(message["data"]["leaf_cert"]["all_domains"]),
+                            message["data"]["leaf_cert"]["fingerprint"],
+                            message["data"]["leaf_cert"]["serial_number"],
+                            datetime.fromtimestamp(message["data"]["leaf_cert"]["not_before"], tz=timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            datetime.fromtimestamp(message["data"]["leaf_cert"]["not_after"], tz=timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            message["data"]["leaf_cert"]["subject"]["aggregated"],
+                            datetime.fromtimestamp(message["data"]["seen"], tz=timezone.utc).strftime(TIMESTAMP_OUTPUT_FORMAT),
+                            message["data"]["source"]["name"],
+                            message["data"]["source"]["url"],
+                            message["data"]["update_type"]
+                        ]
+                    )
+                suspicious_file.flush()
 
 if __name__ == '__main__':
-    with open(suspicious_yaml, 'r') as f:
+
+    parser = argparse.ArgumentParser(
+        description="Identify suspicious domains from Certificate Transparency Logs."
+    )
+
+    parser.add_argument(
+        '--debug', '-d',
+        action='store_true',
+        default=False,
+        help='Enable debugging output.'
+    )
+
+    parser.add_argument(
+        '--certstream-url', '-u',
+        type=str,
+        default=CERTSTREAM_URL_DEFAULT,
+        help=f"URL for the Certificate Transparency stream. DEFAULT: {CERTSTREAM_URL_DEFAULT}."
+    )
+
+    parser.add_argument(
+        '--suspicious-path', '-s',
+        type=str,
+        default=LOG_SUSPICIOUS_DEFAULT,
+        help=f'File in which to store the suspicious domain log. DEFAULT: {LOG_SUSPICIOUS_DEFAULT}.'
+    )
+
+    parser.add_argument(
+        '--suspicious-yaml', '-S',
+        type=str,
+        default=SUSPICIOUS_DEFAULT,
+        help=f'YAML file containing suspicious entries and weights. DEFAULT: {SUSPICIOUS_DEFAULT}.'
+    )
+
+    parser.add_argument(
+        '--external-yaml', '-E',
+        type=str,
+        default=EXTERNAL_YAML_DEFAULT,
+        help=f'YAML file containing site-specific suspicious entries and weights. DEFAULT: {EXTERNAL_YAML_DEFAULT}.'
+    )
+
+    parser.add_argument(
+        '--details', '-D',
+        #type=bool,
+        action='store_true',
+        default=False,
+        help='Add more details to the suspicious domain log. DEFAULT: False.'
+    )
+
+    args = parser.parse_args()
+
+    if args.debug:
+        print("**********")
+        print(f"Command line args: {args}")
+        print("**********")
+        print()
+
+    pbar = tqdm.tqdm(desc='certificate_update', unit=' certs')
+
+    with open(args.suspicious_yaml, 'r') as f:
         suspicious = yaml.safe_load(f)
 
-    with open(external_yaml, 'r') as f:
+    with open(args.external_yaml, 'r') as f:
         external = yaml.safe_load(f)
 
     if external['override_suspicious.yaml'] is True:
@@ -154,5 +246,32 @@ if __name__ == '__main__':
 
         if external['tlds'] is not None:
             suspicious['tlds'].update(external['tlds'])
+    
+    # Open the suspicious domain file for writing only once. The
+    # callback will also access this globally.
+    log_suspicious = args.suspicious_path
+    suspicious_file = open(log_suspicious, 'a')
+    suspicious_writer = csv.writer(
+        suspicious_file,
+        dialect='excel'
+    )
 
-    certstream.listen_for_events(callback, url=certstream_url)
+    suspicious_writer.writerow(
+        [
+            "timestamp",
+            "domain",
+            "score",
+            "all_domains",
+            "fingerprint",
+            "serial_number",
+            "not_before",
+            "not_after",
+            "subject",
+            "seen",
+            "issuer",
+            "issuer_url",
+            "message_type"
+        ]
+    )
+
+    certstream.listen_for_events(callback, url=args.certstream_url)

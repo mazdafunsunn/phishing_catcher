@@ -1,3 +1,10 @@
+whitelist:
+# Domains that END WITH these strings won't be 
+# considered suspicious at all (they are likely
+# legitimate). 
+  - '.amazonaws.com'
+  - '.netflix.com'
+
 keywords:
 # Generic suspicious
     'login': 25
@@ -172,3 +179,4 @@ tlds:
     '.tech':
     '.science':
     '.business':
+
